@@ -132,8 +132,10 @@ def build_pack_from_sources(
             parsed_message = row.message
 
             timestamp = row.timestamp
+            timestamp_origin = "parsed"
             if timestamp is None:
                 timestamp = synthetic_epoch + timedelta(milliseconds=synthetic_index)
+                timestamp_origin = "synthetic"
             synthetic_index += 1
 
             canonical_digest = _canonical_digest(timestamp, parsed_message)
@@ -160,6 +162,7 @@ def build_pack_from_sources(
                     "original_line_number": row.line_number,
                     "split_file_ordinal": row.source_ordinal,
                     "canonical_digest": canonical_digest,
+                    "timestamp_origin": timestamp_origin,
                 },
                 tags=["dlt", category],
                 correlation_keys={"source_type": "dlt"},
@@ -187,8 +190,10 @@ def build_pack_from_sources(
 
             for frame in bus_frames:
                 timestamp = frame.timestamp
+                timestamp_origin = "parsed"
                 if timestamp is None:
                     timestamp = synthetic_epoch + timedelta(milliseconds=synthetic_index)
+                    timestamp_origin = "synthetic"
                 synthetic_index += 1
 
                 decoded_signal_names = sorted(frame.decoded_signals)
@@ -216,6 +221,7 @@ def build_pack_from_sources(
                         "arbitration_id": frame.arbitration_id,
                         "data_hex": frame.data_hex,
                         "decoded_signals": frame.decoded_signals,
+                        "timestamp_origin": timestamp_origin,
                     },
                     tags=[source.source_type, category],
                     correlation_keys={
@@ -234,8 +240,10 @@ def build_pack_from_sources(
 
             for syslog_row in syslog_rows:
                 timestamp = syslog_row.timestamp
+                timestamp_origin = "parsed"
                 if timestamp is None:
                     timestamp = synthetic_epoch + timedelta(milliseconds=synthetic_index)
+                    timestamp_origin = "synthetic"
                 synthetic_index += 1
 
                 category = classify_category(source.source_type, syslog_row.message)
@@ -261,6 +269,7 @@ def build_pack_from_sources(
                         "hostname": syslog_row.hostname,
                         "process": syslog_row.process,
                         "pid": syslog_row.pid,
+                        "timestamp_origin": timestamp_origin,
                     },
                     tags=[source.source_type, category],
                     correlation_keys={
@@ -279,8 +288,10 @@ def build_pack_from_sources(
 
             for test_row in test_rows:
                 timestamp = test_row.timestamp
+                timestamp_origin = "parsed"
                 if timestamp is None:
                     timestamp = synthetic_epoch + timedelta(milliseconds=synthetic_index)
+                    timestamp_origin = "synthetic"
                 synthetic_index += 1
 
                 category = classify_category(source.source_type, test_row.message)
@@ -307,6 +318,7 @@ def build_pack_from_sources(
                         "status": test_row.status,
                         "duration_seconds": test_row.duration_seconds,
                         "failure_kind": test_row.failure_kind,
+                        "timestamp_origin": timestamp_origin,
                     },
                     tags=[source.source_type, category, test_row.status],
                     correlation_keys={
@@ -326,8 +338,10 @@ def build_pack_from_sources(
                 continue
 
             timestamp = extract_timestamp(normalized)
+            timestamp_origin = "parsed"
             if timestamp is None:
                 timestamp = synthetic_epoch + timedelta(milliseconds=synthetic_index)
+                timestamp_origin = "synthetic"
             synthetic_index += 1
 
             event = NormalizedEvent(
@@ -338,13 +352,14 @@ def build_pack_from_sources(
                 message=normalized,
                 severity=classify_severity(normalized),
                 category=classify_category(source.source_type, normalized),
-                attributes={"line_number": line_number},
+                attributes={"line_number": line_number, "timestamp_origin": timestamp_origin},
                 tags=[source.source_type, classify_category(source.source_type, normalized)],
                 correlation_keys={"source_type": source.source_type},
             )
             events.append(event)
             source_event_counts[source.path] += 1
 
+    parse_warnings.extend(_align_event_timestamps(events))
     events.sort(key=_event_sort_key)
 
     pattern_collapses = collapse_repeated_patterns(events)
@@ -482,8 +497,7 @@ def _build_source_manifests(
         split_paths = [source.path for source in dlt_sources]
         split_hashes = [_sha256_file(path) for path in split_paths]
         split_payload = "|".join(
-            f"{path}:{digest}"
-            for path, digest in zip(split_paths, split_hashes, strict=True)
+            f"{path}:{digest}" for path, digest in zip(split_paths, split_hashes, strict=True)
         )
         source_manifests.append(
             SourceFileManifest(
@@ -532,6 +546,59 @@ def _event_sort_key(event: NormalizedEvent) -> tuple[datetime, str, int, str]:
         line_number = 0
 
     return (event.timestamp, event.source_file, line_number, event.event_id)
+
+
+def _align_event_timestamps(
+    events: list[NormalizedEvent],
+    *,
+    anchor_source_type: str = "dlt",
+    min_skew_seconds: int = 30,
+    max_skew_seconds: int = 1800,
+) -> list[str]:
+    warnings: list[str] = []
+    parsed_events = [
+        event for event in events if event.attributes.get("timestamp_origin") == "parsed"
+    ]
+    if not parsed_events:
+        return warnings
+
+    anchor_events = [event for event in parsed_events if event.source_type == anchor_source_type]
+    if not anchor_events:
+        anchor_events = parsed_events
+
+    anchor_start = min(event.timestamp for event in anchor_events)
+
+    events_by_source: dict[str, list[NormalizedEvent]] = {}
+    for event in events:
+        events_by_source.setdefault(event.source_file, []).append(event)
+
+    for source_file, source_events in events_by_source.items():
+        parsed_source_events = [
+            event for event in source_events if event.attributes.get("timestamp_origin") == "parsed"
+        ]
+        if not parsed_source_events:
+            continue
+        if any(event.source_type == anchor_source_type for event in parsed_source_events):
+            continue
+
+        source_start = min(event.timestamp for event in parsed_source_events)
+        offset = anchor_start - source_start
+        offset_seconds = offset.total_seconds()
+        if abs(offset_seconds) < min_skew_seconds or abs(offset_seconds) > max_skew_seconds:
+            continue
+
+        for event in source_events:
+            if "original_timestamp" not in event.attributes:
+                event.attributes["original_timestamp"] = event.timestamp.isoformat()
+            event.attributes["timestamp_offset_seconds"] = offset_seconds
+            event.timestamp = event.timestamp + offset
+
+        warnings.append(
+            "Timestamp alignment applied for "
+            f"{source_file} (offset {offset_seconds:+.1f}s, anchor={anchor_source_type})"
+        )
+
+    return warnings
 
 
 def _build_source_artifacts(

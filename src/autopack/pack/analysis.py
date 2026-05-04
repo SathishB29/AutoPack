@@ -76,9 +76,7 @@ def classify_category(source_type: str, message: str) -> str:
 
 def event_id(source_type: str, path: Path, line_number: int, message: str) -> str:
     """Generate a deterministic event ID."""
-    digest = hashlib.sha256(
-        f"{source_type}|{path}|{line_number}|{message}".encode()
-    ).hexdigest()
+    digest = hashlib.sha256(f"{source_type}|{path}|{line_number}|{message}".encode()).hexdigest()
     return f"evt-{digest[:16]}"
 
 
