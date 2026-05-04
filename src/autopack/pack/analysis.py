@@ -4,18 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections import Counter
-from collections import defaultdict
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from collections import Counter, defaultdict
+from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from typing import Sequence
 
-from autopack.schema import Anomaly
-from autopack.schema import Correlation
-from autopack.schema import NormalizedEvent
+from autopack.schema import Anomaly, Correlation, NormalizedEvent
 
 _TIMESTAMP_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)"
@@ -82,7 +77,7 @@ def classify_category(source_type: str, message: str) -> str:
 def event_id(source_type: str, path: Path, line_number: int, message: str) -> str:
     """Generate a deterministic event ID."""
     digest = hashlib.sha256(
-        f"{source_type}|{path}|{line_number}|{message}".encode("utf-8")
+        f"{source_type}|{path}|{line_number}|{message}".encode()
     ).hexdigest()
     return f"evt-{digest[:16]}"
 
@@ -119,6 +114,53 @@ def extract_anomalies(events: list[NormalizedEvent]) -> list[Anomaly]:
         anomalies.append(_create_anomaly_from_group(current_signature or "unknown", current_events))
 
     return anomalies
+
+
+def collapse_repeated_patterns(
+    events: Sequence[NormalizedEvent],
+    *,
+    min_count: int = 3,
+    max_gap_seconds: int = 5,
+) -> list[dict[str, Any]]:
+    """Collapse repeated event signatures into deterministic windows."""
+    if not events:
+        return []
+
+    if min_count <= 1:
+        raise ValueError("min_count must be >= 2")
+    if max_gap_seconds <= 0:
+        raise ValueError("max_gap_seconds must be > 0")
+
+    sorted_events = sorted(events, key=lambda item: (item.timestamp, item.event_id))
+    windows: list[dict[str, Any]] = []
+
+    current_signature: str | None = None
+    current_events: list[NormalizedEvent] = []
+    max_gap = timedelta(seconds=max_gap_seconds)
+
+    for event in sorted_events:
+        signature = _event_signature(event)
+        if not current_events:
+            current_signature = signature
+            current_events = [event]
+            continue
+
+        previous = current_events[-1]
+        if signature == current_signature and (event.timestamp - previous.timestamp) <= max_gap:
+            current_events.append(event)
+            continue
+
+        if len(current_events) >= min_count:
+            windows.append(_build_pattern_window(current_signature or "unknown", current_events))
+
+        current_signature = signature
+        current_events = [event]
+
+    if len(current_events) >= min_count:
+        windows.append(_build_pattern_window(current_signature or "unknown", current_events))
+
+    windows.sort(key=lambda item: (-int(item["count"]), str(item["start_time"])))
+    return windows
 
 
 def extract_correlations(
@@ -229,7 +271,8 @@ def _event_count_correlations(events: Sequence[NormalizedEvent]) -> list[Correla
                         source_types=sorted({event.source_type for event in window}),
                         summary=(
                             f"{len(window)} failure events in 5m for "
-                            f"source={source_type} ecu={ecu or '-'} app={app_id or '-'} ctx={context_id or '-'}"
+                            f"source={source_type} ecu={ecu or '-'} "
+                            f"app={app_id or '-'} ctx={context_id or '-'}"
                         ),
                         attributes={
                             "group_key": {
@@ -335,7 +378,8 @@ def _ordered_failure_recovery_correlations(events: Sequence[NormalizedEvent]) ->
                         source_types=sorted({event.source_type for event in triplet}),
                         summary=(
                             "Ordered failure→reset/timeout→recovery chain detected "
-                            f"within 10m ({first.source_type},{second.source_type},{third.source_type})"
+                            "within 10m "
+                            f"({first.source_type},{second.source_type},{third.source_type})"
                         ),
                         attributes={
                             "ordered": True,
@@ -406,9 +450,7 @@ def _create_correlation(
     attributes: dict[str, Any],
 ) -> Correlation:
     digest = hashlib.sha256(
-        f"{rule}|{window_start.isoformat()}|{window_end.isoformat()}|{'|'.join(event_ids)}".encode(
-            "utf-8"
-        )
+        f"{rule}|{window_start.isoformat()}|{window_end.isoformat()}|{'|'.join(event_ids)}".encode()
     ).hexdigest()
 
     return Correlation(
@@ -514,7 +556,8 @@ def build_summary_markdown(
             "",
             "## Notes",
             "- Pack generated using deterministic preprocessing only (no LLM path).",
-            "- Correlations are temporal and evidence-linked; inspect correlations.jsonl for details.",
+            "- Correlations are temporal and evidence-linked; "
+            "inspect correlations.jsonl for details.",
             "",
         ]
     )
@@ -525,11 +568,24 @@ def _event_signature(event: NormalizedEvent) -> str:
     return f"{event.source_type}|{event.category}|{normalized_message}"
 
 
+def _build_pattern_window(signature: str, events: Sequence[NormalizedEvent]) -> dict[str, Any]:
+    severity_counts = Counter(event.severity for event in events)
+    return {
+        "signature": signature,
+        "count": len(events),
+        "start_time": events[0].to_dict()["timestamp"],
+        "end_time": events[-1].to_dict()["timestamp"],
+        "source_types": sorted({event.source_type for event in events}),
+        "categories": sorted({event.category for event in events}),
+        "severity_breakdown": dict(severity_counts),
+        "sample_message": events[0].message,
+        "event_ids": [event.event_id for event in events[:5]],
+    }
+
+
 def _create_anomaly_from_group(signature: str, events: list[NormalizedEvent]) -> Anomaly:
     digest = hashlib.sha256(
-        f"{signature}|{events[0].timestamp.isoformat()}|{events[-1].timestamp.isoformat()}".encode(
-            "utf-8"
-        )
+        f"{signature}|{events[0].timestamp.isoformat()}|{events[-1].timestamp.isoformat()}".encode()
     ).hexdigest()
 
     severity = "critical" if any(event.severity == "critical" for event in events) else "error"

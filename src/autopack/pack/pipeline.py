@@ -4,31 +4,28 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from typing import Iterable
-from typing import Sequence
 
-from autopack.pack.analysis import build_summary_markdown
-from autopack.pack.analysis import classify_category
-from autopack.pack.analysis import classify_severity
-from autopack.pack.analysis import event_id
-from autopack.pack.analysis import extract_anomalies
-from autopack.pack.analysis import extract_correlations
-from autopack.pack.analysis import extract_timestamp
+from autopack.pack.analysis import (
+    build_summary_markdown,
+    classify_category,
+    classify_severity,
+    collapse_repeated_patterns,
+    event_id,
+    extract_anomalies,
+    extract_correlations,
+    extract_timestamp,
+)
+from autopack.pack.writer import PackWriteResult, write_investigation_pack
 from autopack.parsers.bus.adapter import parse_bus_trace
 from autopack.parsers.dlt import parse_dlt_file
 from autopack.parsers.syslog.adapter import parse_syslog_file
 from autopack.parsers.testlogs.adapter import parse_test_log_file
-from autopack.pack.writer import PackWriteResult
-from autopack.pack.writer import write_investigation_pack
-from autopack.schema import Manifest
-from autopack.schema import NormalizedEvent
-from autopack.schema import SourceFileManifest
+from autopack.schema import Manifest, NormalizedEvent, SourceFileManifest
 
 LOGGER = logging.getLogger(__name__)
 
@@ -350,6 +347,7 @@ def build_pack_from_sources(
 
     events.sort(key=_event_sort_key)
 
+    pattern_collapses = collapse_repeated_patterns(events)
     anomalies = extract_anomalies(events)
     correlations = extract_correlations(anomalies, events)
 
@@ -389,6 +387,7 @@ def build_pack_from_sources(
         correlations=correlations,
         summary_markdown=summary,
         source_artifacts=source_artifacts,
+        pattern_collapses=pattern_collapses,
     )
 
 
@@ -483,7 +482,8 @@ def _build_source_manifests(
         split_paths = [source.path for source in dlt_sources]
         split_hashes = [_sha256_file(path) for path in split_paths]
         split_payload = "|".join(
-            f"{path}:{digest}" for path, digest in zip(split_paths, split_hashes)
+            f"{path}:{digest}"
+            for path, digest in zip(split_paths, split_hashes, strict=True)
         )
         source_manifests.append(
             SourceFileManifest(
@@ -513,12 +513,11 @@ def _build_source_manifests(
 
 def _iter_text_lines(path: Path) -> Iterable[tuple[int, str]]:
     with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            yield line_number, line
+        yield from enumerate(handle, start=1)
 
 
 def _canonical_digest(timestamp: datetime, message: str) -> str:
-    payload = f"dlt|{timestamp.isoformat()}|{message}".encode("utf-8")
+    payload = f"dlt|{timestamp.isoformat()}|{message}".encode()
     return hashlib.sha256(payload).hexdigest()[:16]
 
 

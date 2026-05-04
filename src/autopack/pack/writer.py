@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from typing import Mapping
-from typing import Sequence
 
-from autopack.schema import Anomaly
-from autopack.schema import Correlation
-from autopack.schema import Manifest
-from autopack.schema import NormalizedEvent
-from autopack.utils.io import ensure_directory
-from autopack.utils.io import write_json
-from autopack.utils.io import write_jsonl
+from autopack.schema import Anomaly, Correlation, Manifest, NormalizedEvent
+from autopack.utils.io import ensure_directory, write_json, write_jsonl
 
 
 @dataclass(slots=True)
@@ -34,6 +28,7 @@ def write_investigation_pack(
     correlations: Sequence[Correlation],
     summary_markdown: str,
     source_artifacts: Mapping[str, Sequence[dict[str, Any]]] | None = None,
+    pattern_collapses: Sequence[dict[str, Any]] | None = None,
 ) -> PackWriteResult:
     """Write a deterministic incident pack to disk."""
     manifest.validate()
@@ -90,7 +85,10 @@ def write_investigation_pack(
     )
     files_written.append("INVESTIGATION_GUIDE.md")
 
-    write_json(output_dir / "evidence" / "top_patterns.json", _build_top_patterns(anomalies))
+    write_json(
+        output_dir / "evidence" / "top_patterns.json",
+        _build_top_patterns(anomalies, pattern_collapses),
+    )
     files_written.append("evidence/top_patterns.json")
 
     write_json(
@@ -155,14 +153,22 @@ def _build_investigation_guide() -> str:
     )
 
 
-def _build_top_patterns(anomalies: Sequence[Anomaly]) -> dict[str, object]:
+def _build_top_patterns(
+    anomalies: Sequence[Anomaly],
+    pattern_collapses: Sequence[dict[str, Any]] | None,
+) -> dict[str, object]:
     counter = Counter(item.kind for item in anomalies)
-    return {
+    payload: dict[str, object] = {
         "total_anomalies": len(anomalies),
         "top_anomaly_kinds": [
             {"kind": kind, "count": count} for kind, count in counter.most_common(10)
         ],
     }
+
+    collapsed = list(pattern_collapses or [])
+    payload["total_collapsed_patterns"] = len(collapsed)
+    payload["collapsed_patterns"] = collapsed
+    return payload
 
 
 def _build_timeline_windows(

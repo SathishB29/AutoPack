@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,12 +37,16 @@ def parse_bus_trace(
     """Parse a bus trace with third-party readers when available, with fallback."""
     warnings: list[str] = []
 
-    frames, third_party_warnings = _parse_with_python_can(path, dbc_path)
+    decoder, decoder_warning = _load_cantools_decoder(dbc_path)
+    if decoder_warning is not None:
+        warnings.append(decoder_warning)
+
+    frames, third_party_warnings = _parse_with_python_can(path, decoder)
     warnings.extend(third_party_warnings)
     if frames:
         return frames, warnings
 
-    fallback_frames = _parse_text_fallback(path)
+    fallback_frames = _parse_text_fallback(path, decoder)
     if fallback_frames:
         warnings.append(
             f"Bus parser fallback used for {path.name}; parsed {len(fallback_frames)} text rows"
@@ -54,7 +57,7 @@ def parse_bus_trace(
 
 def _parse_with_python_can(
     path: Path,
-    dbc_path: Path | None,
+    decoder: Any | None,
 ) -> tuple[list[ParsedBusFrame], list[str]]:
     warnings: list[str] = []
 
@@ -63,10 +66,6 @@ def _parse_with_python_can(
     except Exception:
         warnings.append(f"python-can not available; cannot parse {path.name} with protocol reader")
         return [], warnings
-
-    decoder, decoder_warning = _load_cantools_decoder(dbc_path)
-    if decoder_warning is not None:
-        warnings.append(decoder_warning)
 
     parsed: list[ParsedBusFrame] = []
     try:
@@ -109,7 +108,7 @@ def _parse_with_python_can(
     return parsed, warnings
 
 
-def _parse_text_fallback(path: Path) -> list[ParsedBusFrame]:
+def _parse_text_fallback(path: Path, decoder: Any | None) -> list[ParsedBusFrame]:
     parsed: list[ParsedBusFrame] = []
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
@@ -120,6 +119,17 @@ def _parse_text_fallback(path: Path) -> list[ParsedBusFrame]:
             frame_id = _extract_frame_id(normalized)
             arbitration_id = _to_int(frame_id, base=16) if frame_id is not None else None
             data_hex = _extract_data_hex(normalized)
+            data_bytes = b""
+            if data_hex:
+                try:
+                    data_bytes = bytes.fromhex(data_hex)
+                except ValueError:
+                    data_bytes = b""
+            decoded_signals = (
+                _decode_signal_values(decoder, arbitration_id, data_bytes)
+                if decoder is not None
+                else {}
+            )
 
             parsed.append(
                 ParsedBusFrame(
@@ -130,7 +140,7 @@ def _parse_text_fallback(path: Path) -> list[ParsedBusFrame]:
                     arbitration_id=arbitration_id,
                     data_hex=data_hex,
                     message=normalized,
-                    decoded_signals={},
+                    decoded_signals=decoded_signals,
                 )
             )
 
