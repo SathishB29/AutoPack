@@ -1,0 +1,1 @@
+"""Syslog parser adapters."""
