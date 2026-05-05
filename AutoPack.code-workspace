@@ -27,7 +27,8 @@
             "**/.mypy_cache": true,
             "**/.venv": true,
             "**/build": true,
-            "**/dist": true
+            "**/dist": true,
+            "**/.ruff_cache": true
         },
         "files.watcherExclude": {
             "**/__pycache__/**": true,
@@ -35,7 +36,8 @@
             "**/.mypy_cache/**": true,
             "**/.venv/**": true,
             "**/build/**": true,
-            "**/dist/**": true
+            "**/dist/**": true,
+            "**/.ruff_cache/**": true
         },
         "makefile.configureOnOpen": false
     },
