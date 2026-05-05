@@ -1,0 +1,592 @@
+# GitHub Copilot Instructions — AutoPack
+
+You are working in this repository as the principal engineer building **AutoPack**, an open-source **Automotive Investigation Pack Builder**.
+
+Your job is to build a real product, not a demo, not a thin wrapper, and not a chatbot over raw logs.
+
+---
+
+## 0. Product Mission
+
+Build a **CLI-first deterministic evidence compiler** for automotive validation.
+
+AutoPack ingests noisy automotive artifacts such as:
+- DLT logs
+- BLF / ASC bus traces
+- DBC files for decoding
+- optional TCU platform logs (syslog / Linux / QNX-style text logs)
+- optional test logs / test artifacts (secondary only)
+
+AutoPack outputs a **portable investigation pack** that:
+- humans can inspect
+- scripts can process
+- CI can archive
+- LLMs can reason over later
+
+### Product slogan
+**Record once. Investigate anywhere.**
+
+### Core principle
+**Deterministic preprocessing first. LLM reasoning later.**
+
+Never build a product that depends on pasting raw 20k-line logs into a model.
+
+---
+
+## 1. Non-Negotiable Design Principles
+
+### 1.1 No thin wrappers
+Do not build:
+- a raw log upload UI
+- a generic “AI log analyzer”
+- a prompt wrapper over GPT/Copilot/Codex
+- a fake RAG system over raw log lines
+
+If the feature is just “take file, call LLM, print summary”, reject it.
+
+### 1.2 Deterministic first
+The core value must exist **without any LLM**.
+
+The repository must still be useful if no model/API is configured.
+
+### 1.3 Evidence > prose
+Every conclusion must point back to structured evidence:
+- timestamps
+- source file
+- event id
+- decoded signal
+- anomaly window
+- correlation rule
+
+### 1.4 Token efficiency is a systems problem
+Primary token reduction must come from:
+- parsing
+- normalization
+- deduplication
+- burst collapsing
+- anomaly extraction
+- timeline slicing
+- evidence selection
+
+Not from “just use smaller prompts.”
+
+### 1.5 CLI-first
+The CLI is the product center.
+
+Everything else is secondary.
+
+### 1.6 Open-source quality
+This repo must be:
+- understandable
+- well-tested
+- modular
+- documented
+- benchmarked
+- usable by engineers without LLMs
+
+---
+
+## 2. Product Scope by Phase
+
+# Phase 1 — Automotive Only (Primary Scope)
+Focus only on **TCU / ECU validation incident triage**.
+
+### Inputs for Phase 1
+Required:
+- DLT log input
+- BLF or ASC input
+- DBC input for decoding
+Optional:
+- syslog / Linux / QNX text log
+- test logs / test artifacts (secondary)
+
+### Phase 1 Outputs
+Create an **investigation pack** containing:
+- manifest.json
+- timeline.jsonl
+- anomalies.jsonl
+- correlations.jsonl
+- summary.md
+- source-derived parsed artifacts
+- optional evidence windows
+
+### Phase 1 must NOT include
+- dashboards
+- web UI
+- MCP-first workflow
+- embeddings-first retrieval
+- historical vector search
+- multi-vehicle everything
+- automatic fix generation
+- “AI root cause magic”
+
+---
+
+## 3. Product Vision Beyond Phase 1
+
+# Phase 2
+Add:
+- historical incident indexing
+- optional embeddings over normalized evidence / past packs
+- optional reranking for evidence selection
+- optional LLM explanation layer
+- pack comparison / regression comparison
+
+# Phase 3
+Add:
+- optional MCP server
+- optional Python SDK extensions
+- plugin system for more automotive sources
+- richer incident comparison and trend analysis
+
+# Phase 4
+Add:
+- optional CI/test evidence pack vertical
+- optional cross-domain evidence packs
+- optional multimodal artifacts if necessary
+
+Do not prematurely build later phases before Phase 1 is working end-to-end.
+
+---
+
+## 4. Primary User Persona
+
+Primary user:
+- TCU validation engineer
+- ECU integration / QA engineer
+- system test / triage engineer
+
+Main job to be solved:
+> “Given DLT + bus trace + optional platform/test logs from one failure run, build one compact evidence pack that explains what happened and allows reliable investigation.”
+
+---
+
+## 5. Repository Architecture
+
+Use Python as the primary implementation language unless there is a compelling technical reason not to.
+
+Recommended repo structure:
+
+autopack/
+  pyproject.toml
+  README.md
+  LICENSE
+  .github/
+    workflows/
+  docs/
+    architecture.md
+    pack-spec.md
+    schema.md
+    contributing.md
+    benchmarks.md
+  src/
+    autopack/
+      __init__.py
+      cli/
+      schema/
+      parsers/
+        dlt/
+        bus/
+        syslog/
+        testlogs/
+      normalizer/
+      compressor/
+      correlator/
+      pack/
+      explain/
+      retrieval/
+      utils/
+  tests/
+    unit/
+    integration/
+    fixtures/
+  examples/
+    tcu_disconnect/
+    reconnect_loop/
+    bus_instability/
+  benchmarks/
+    scenarios/
+    expected_outputs/
+
+Keep packages small and cohesive.
+
+---
+
+## 6. Core Domain Model
+
+Implement a canonical normalized event schema.
+
+Each event should support fields like:
+- event_id
+- timestamp
+- source_type
+- source_file
+- ecu
+- app_id
+- context_id
+- bus_channel
+- frame_id
+- signal_name
+- severity
+- category
+- message
+- attributes (free-form structured map)
+- tags
+- correlation_keys
+
+Never keep only raw text if structure can be extracted.
+
+---
+
+## 7. Pack Format
+
+The pack is the main product artifact.
+
+Implement a pack format like:
+
+incident-pack/
+  SESSION.md
+  DATA_FORMAT.md
+  INVESTIGATION_GUIDE.md
+  manifest.json
+  timeline.jsonl
+  anomalies.jsonl
+  correlations.jsonl
+  summary.md
+  sources/
+    dlt.parsed.jsonl
+    bus.frames.parquet
+    bus.signals.parquet
+    syslog.parsed.jsonl
+    test_failures.jsonl
+  evidence/
+    top_patterns.json
+    timeline_windows.json
+    root_cause_candidates.json
+
+### Rules
+- Keep machine-readable and human-readable outputs together
+- Use JSONL for event streams
+- Use Parquet where large tabular/bus data is useful
+- Do not hide information in opaque binary blobs
+- Include source hashes and parse stats in manifest.json
+
+---
+
+## 8. Phase 1 Feature Requirements
+
+### 8.1 CLI commands
+Implement at minimum:
+
+- `autopack build`
+- `autopack summarize`
+- `autopack validate-pack`
+
+Optional later:
+- `autopack explain`
+- `autopack compare`
+
+### 8.2 Example CLI behavior
+Examples of supported usage:
+
+autopack build \
+  --dlt logs/tcu.dlt \
+  --blf logs/run.blf \
+  --dbc db/tcu.dbc \
+  --syslog logs/syslog.txt \
+  --out out/incident-pack
+
+Optional test inputs:
+
+autopack build \
+  --dlt logs/tcu.dlt \
+  --blf logs/run.blf \
+  --dbc db/tcu.dbc \
+  --junit reports/results.xml \
+  --pytest-log reports/pytest.log \
+  --artifacts-dir reports/artifacts \
+  --out out/incident-pack
+
+### 8.3 Required Phase 1 processing
+Implement deterministic pipelines for:
+- DLT parsing
+- BLF/ASC loading
+- DBC decode where available
+- syslog/plain-text parsing
+- event normalization
+- repeated-pattern collapse
+- burst detection
+- anomaly extraction
+- basic time-window correlation across sources
+- pack generation
+
+### 8.4 Required summaries
+Generate:
+- top anomalies
+- repeated error patterns
+- candidate trigger windows
+- likely cross-source correlations
+- a concise incident summary
+
+---
+
+## 9. Test Logs Policy
+
+Test logs are supported as **secondary evidence** only.
+
+They are not the product center in Phase 1.
+
+Use test logs to capture:
+- which test failed
+- failure step
+- failure message
+- timestamps
+- retry/flaky information
+- artifact references
+
+Never treat test report output alone as root cause.
+
+Implement a normalized test evidence format:
+- test_id
+- framework
+- status
+- duration
+- failure_kind
+- message
+- stack_summary
+- artifact_refs
+- linked_windows
+
+---
+
+## 10. LLM / Retrieval Policy
+
+### 10.1 Phase 1 default
+No LLM required for core functionality.
+
+No embeddings required.
+No reranker required.
+No MoE-specific architecture.
+
+### 10.2 LLM usage policy
+Only use an LLM after deterministic pack generation, for:
+- explanation
+- Q&A over pack
+- evidence-grounded root-cause hypotheses
+
+Never use an LLM for:
+- raw parsing
+- DBC decoding
+- timestamp alignment
+- repeated pattern grouping
+- burst detection
+- simple anomaly classification
+
+### 10.3 Retrieval policy for later phases
+If retrieval is added later:
+- index only normalized evidence, summaries, and historical packs
+- do NOT vectorize raw noisy log lines by default
+- use rerankers only after deterministic filtering + first-stage retrieval
+
+---
+
+## 11. Engineering Quality Requirements
+
+### 11.1 Tests
+Write tests as you build.
+
+At minimum include:
+- unit tests for parsers
+- normalization tests
+- anomaly grouping tests
+- correlation tests
+- pack validation tests
+- fixture-based integration tests
+
+### 11.2 Fixtures
+Create realistic synthetic-but-plausible fixtures for:
+- TCU reconnect loop
+- bus instability
+- DLT error burst
+- platform modem reset
+- test timeout linked to actual system event
+
+### 11.3 Documentation
+Every major module must include:
+- purpose
+- inputs
+- outputs
+- invariants
+- extension points
+
+### 11.4 No dead scaffolding
+Do not create placeholder architecture without implementation.
+Do not add empty plugin systems.
+Do not add future abstractions that are unused.
+
+---
+
+## 12. Coding Standards
+
+### 12.1 General
+- Prefer explicit code over clever code
+- Favor pure functions for transformation stages
+- Keep parsing separate from normalization
+- Keep normalization separate from explanation
+- Keep optional AI integrations behind clear interfaces
+
+### 12.2 Python specifics
+- Use type hints everywhere
+- Use dataclasses or pydantic models where appropriate
+- Use pathlib instead of string paths
+- Keep dependencies minimal and justified
+- Use logging, not print, for library code
+- Provide clear CLI error messages
+
+### 12.3 Performance
+- Support large files without exploding memory where possible
+- Prefer streaming / iterators for raw event reading when practical
+- Use Parquet for large decoded tables when useful
+
+---
+
+## 13. Implementation Strategy
+
+When working in agent mode, always follow this loop:
+
+1. read current repo state
+2. propose a small implementation step
+3. implement code
+4. add or update tests
+5. run tests / linters if available
+6. update docs when behavior changes
+7. summarize exactly what changed
+
+Do not jump randomly across the whole repo.
+
+Build in vertical slices.
+
+---
+
+## 14. Build Order (Strict)
+
+Follow this order unless the repo state clearly requires adjustment:
+
+### Step 1
+Scaffold project structure and CLI skeleton
+
+### Step 2
+Define canonical schema models
+
+### Step 3
+Implement pack writer / validator
+
+### Step 4
+Implement DLT parser adapter
+
+### Step 5
+Implement bus trace adapter (BLF/ASC)
+
+### Step 6
+Implement DBC decode path
+
+### Step 7
+Implement syslog parser
+
+### Step 8
+Implement normalization pipeline
+
+### Step 9
+Implement compression / pattern collapse
+
+### Step 10
+Implement anomaly extraction
+
+### Step 11
+Implement cross-source correlation
+
+### Step 12
+Implement summaries and pack docs
+
+### Step 13
+Implement optional test log adapter
+
+### Step 14
+Implement optional explain layer
+
+Do not start with LLM integration.
+
+---
+
+## 15. Acceptance Criteria for Phase 1
+
+Phase 1 is successful only if all of the following are true:
+
+- A user can run `autopack build` on a real or fixture incident
+- The command outputs a valid investigation pack
+- The pack is readable without AI
+- The pack meaningfully reduces raw evidence volume
+- Repeated noise is collapsed
+- At least one benchmark scenario produces sensible anomalies + correlations
+- Tests exist for the core deterministic pipeline
+- README explains how to run the product end-to-end
+
+If these are not met, Phase 1 is not done.
+
+---
+
+## 16. What You Must Avoid
+
+Never:
+- build a chat-only experience
+- paste full raw logs into prompts
+- call an LLM as the first processing step
+- hide logic in giant prompt templates
+- create untested abstractions
+- over-generalize to every vehicle domain too early
+- make MCP the center of the product
+
+---
+
+## 17. Documentation Deliverables
+
+Ensure the repo contains:
+- README.md
+- docs/architecture.md
+- docs/pack-spec.md
+- docs/schema.md
+- docs/benchmarks.md
+- examples/ with runnable sample commands
+
+README must clearly state:
+- what the product is
+- what it is not
+- why deterministic evidence packs matter
+- how to build a pack
+- what Phase 1 supports
+
+---
+
+## 18. Agent Output Style
+
+When responding in agent mode:
+- be concise
+- explain architectural choices
+- prefer concrete next steps
+- point out tradeoffs
+- call out if a requested feature would create a thin wrapper or premature abstraction
+
+If a request conflicts with product principles, say so clearly and propose a better alternative.
+
+---
+
+## 19. Immediate Task
+
+Start by:
+1. scaffolding the repository structure
+2. creating the CLI skeleton
+3. defining schema models
+4. implementing pack creation and validation
+5. writing initial README and architecture docs
+
+Then stop and summarize progress before moving to parser implementation.

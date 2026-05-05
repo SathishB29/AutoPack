@@ -1,0 +1,63 @@
+{
+    "version": 1,
+    "profiles": {
+        "autosar": {
+            "ecu": [
+                "\\bECU\\s*[:=]\\s*([A-Za-z0-9_.-]+)"
+            ],
+            "app": [
+                "\\bAPP(?:ID)?\\s*[:=]\\s*([A-Za-z0-9_.-]+)",
+                "\\[(?:APPID|APPid)\\s*:\\s*([^\\]]+)\\]"
+            ],
+            "context": [
+                "\\bCTX(?:ID|_ID)?\\s*[:=]\\s*([A-Za-z0-9_.-]+)",
+                "\\[(?:CTXID|CTID|CTxID)\\s*:\\s*([^\\]]+)\\]"
+            ]
+        },
+        "bracketed": {
+            "ecu": [
+                "\\[(?:ECU|Ecu|ecu)\\s*:\\s*([^\\]]+)\\]"
+            ],
+            "app": [
+                "\\[(?:APPID|APPid|APID)\\s*:\\s*([^\\]]+)\\]"
+            ],
+            "context": [
+                "\\[(?:CTXID|CTID|CTxID)\\s*:\\s*([^\\]]+)\\]"
+            ]
+        },
+        "oem_relaxed": {
+            "ecu": [
+                "\\bECU\\s*\\(\\s*([A-Za-z0-9_.-]+)\\s*\\)",
+                "\\bECU\\s*\\[\\s*([A-Za-z0-9_.-]+)\\s*\\]",
+                "\\bECU\\s*[:=]\\s*([A-Za-z0-9_.-]+)"
+            ],
+            "app": [
+                "\\bAP(?:P|P?ID)\\s*\\(\\s*([A-Za-z0-9_.-]+)\\s*\\)",
+                "\\bAP(?:P|P?ID)\\s*\\[\\s*([A-Za-z0-9_.-]+)\\s*\\]",
+                "\\bAPP(?:ID)?\\s*[:=]\\s*([A-Za-z0-9_.-]+)"
+            ],
+            "context": [
+                "\\bCT(?:XID|ID)\\s*\\(\\s*([A-Za-z0-9_.-]+)\\s*\\)",
+                "\\bCT(?:XID|ID)\\s*\\[\\s*([A-Za-z0-9_.-]+)\\s*\\]",
+                "\\bCTX(?:ID|_ID)?\\s*[:=]\\s*([A-Za-z0-9_.-]+)"
+            ]
+        }
+    },
+    "vendor_map": {
+        "default": [
+            "autosar",
+            "bracketed",
+            "oem_relaxed"
+        ],
+        "oem_tcu_alpha": [
+            "bracketed",
+            "autosar",
+            "oem_relaxed"
+        ],
+        "oem_ecu_beta": [
+            "oem_relaxed",
+            "autosar",
+            "bracketed"
+        ]
+    }
+}
